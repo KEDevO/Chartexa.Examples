@@ -1,0 +1,357 @@
+<!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8"/>
+      <meta name="viewport" content="width=device-width, initial-scale=1"/>
+      <title>IoT MQTT Telemetry</title>
+      <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+      <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+      <style>
+    :root {
+    --bg:       #0b1020;
+    --panel:    #121a2f;
+    --panel-2:  #0f1629;
+    --line:     #23314f;
+    --text:     #e6edf7;
+    --muted:    #8ea2c5;
+    --accent:   #59c3ff;
+    --ok:       #6ee7a8;
+    --warn:     #ffd166;
+    --bad:      #ff6b6b;
+    --heatmap-bg: #0b1221;
+}
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: var(--text);
+      background: radial-gradient(1200px 700px at 10% -10%, #1a2550 0%, var(--bg) 60%);
+      min-height: 100vh;
+    }
+    .app {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    .topbar, .toolbar, .panel {
+      background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(0,0,0,0.07));
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 18px;
+    }
+    .dash-title { font-size: 20px; font-weight: 700; letter-spacing: 0.2px; }
+    .chip {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 9px;
+      border-radius: 999px;
+      margin-left: 8px;
+      color: #081225;
+      background: var(--ok);
+    }
+    .clock { color: var(--warn); font-size: 14px; font-weight: 600; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 10px 14px;
+      align-items: center;
+    }
+    .toolbar label { color: var(--muted); font-size: 12px; margin-right: 4px; }
+    .toolbar button {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 14px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .toolbar button:hover { background: var(--panel); }
+    .toolbar .poll-hint { margin-left: auto; color: var(--muted); font-size: 12px; }
+    .layout {
+      display: grid;
+      grid-template-columns: 2.1fr 1fr;
+      gap: 12px;
+    }
+    .panel {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .panel > h3 { margin: 0; font-size: 14px; }
+    .sub { color: var(--muted); font-size: 12px; margin-top: 3px; margin-bottom: 10px; }
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .card {
+      background: color-mix(in srgb, var(--panel-2) 80%, var(--bg));
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      margin-top: 8px;
+    }
+    .lbl { font-size: 11px; color: var(--muted); }
+    .val { font-size: 18px; font-weight: 700; margin-top: 4px; }
+    .val.small { font-size: 14px; }
+    .val.ok   { color: var(--ok);   }
+    .val.warn { color: var(--warn); }
+    .val.bad  { color: var(--bad);  }
+    .mono {
+      font-family: Consolas, "Cascadia Code", monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre-line;
+    }
+    .chart-wrap {
+      position: relative;
+      width: 100%;
+      height: 240px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--panel-2) 60%, var(--bg));
+      padding: 8px;
+      margin-top: 4px;
+    }
+    .chart-wrap canvas { width: 100% !important; height: 100% !important; }
+    .chart-wrap.heatmap-wrap {
+      height: 300px;
+      padding: 0;
+      overflow: hidden;
+    }
+    .heatmap-canvas { width: 100%; height: 100%; display: block; }
+    .bottom {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+    .bottom .panel { min-height: 420px; }
+    .evtlog { max-height: 160px; overflow-y: auto; }
+    @media (max-width: 1100px) {
+      .layout { grid-template-columns: 1fr; }
+      .bottom  { grid-template-columns: 1fr; }
+    }
+</style>
+    </head>
+    <body>
+    <div class="app">
+
+      <section class="topbar">
+        <div>
+          <span class="dash-title">IoT MQTT Telemetry</span>
+          <span class="chip">LIVE</span>
+        </div>
+        <span class="clock" id="cx-clock">—</span>
+      </section>
+
+      <section class="toolbar">
+        <button id="cx-refresh">Refresh</button>
+        <button id="cx-pause">Pause</button>
+        <span class="poll-hint">Polling every 1500 ms</span>
+      </section>
+
+      <section class="layout">
+        <div class="panel">
+          <div style='color:var(--muted)'>No main panel configured.</div>
+        </div>
+        <div class="panel">
+
+        </div>
+      </section>
+
+      <section class="bottom">
+
+      </section>
+
+    </div>
+
+    <script>
+    // ---------------------------------------------------------------
+    // Chartexa Pro — generated dashboard script
+    // ---------------------------------------------------------------
+    const API_ENDPOINT = "/api/dashboard";
+    const POLL_MS      = 1500;
+    const PALETTE      = ["#59c3ff", "#6ee7a8", "#ffd166", "#ff8fa3", "#a78bfa", "#fda4af", "#38bdf8", "#34d399", "#fb923c", "#e879f9"];
+
+    let _paused = false;
+    const _charts = {};
+
+    function _updateClock(ts) {
+      document.getElementById("cx-clock").textContent = ts || "—";
+    }
+
+    // ---- Chart helpers --------------------------------------------
+    function _makeChart(ctx, type, stepped, colors, yLabel, yMin, yMax) {
+      const opts = {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "nearest", intersect: false },
+        plugins: {
+          legend: { labels: { color: "var(--text)", boxWidth: 12, font: { size: 11 } } },
+          tooltip: {
+            titleColor: "var(--text)", bodyColor: "var(--text)",
+            backgroundColor: "var(--panel)", borderColor: "var(--line)", borderWidth: 1,
+          },
+        },
+        scales: {
+          x: {
+            type: "time",
+            time: { tooltipFormat: "yyyy-MM-dd HH:mm:ss" },
+            ticks: { color: "var(--muted)", maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+            grid: { color: "var(--line)" },
+          },
+          y: {
+            ticks: { color: "var(--muted)" },
+            grid: { color: "var(--line)" },
+            title: { display: !!yLabel, text: yLabel, color: "var(--muted)" },
+            ...(yMin !== undefined ? { min: yMin } : {}),
+            ...(yMax !== undefined ? { max: yMax } : {}),
+          },
+        },
+      };
+      if (stepped) {
+        opts.elements = { line: { stepped: true } };
+      }
+      return new Chart(ctx, { type, data: { datasets: [] }, options: opts });
+    }
+
+    function _seriesToDatasets(series, isDigital) {
+      const raw = series.data || series.points || [];
+      // heatmap has no datasets here — handled separately
+      if (Array.isArray(raw) && raw.length > 0 && raw[0].name !== undefined) {
+        // multi-device format: [{name, points}]
+        return raw.map((s, i) => ({
+          label: s.name,
+          data: s.points.map(p => ({x: p.x, y: p.y})),
+          parsing: false,
+          borderColor: PALETTE[i % PALETTE.length],
+          backgroundColor: PALETTE[i % PALETTE.length],
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: isDigital ? 0 : 0.2,
+        }));
+      }
+      // single-series format: [{x, y}]
+      return [{
+        label: "Value",
+        data: raw.map(p => ({x: p.x, y: p.y})),
+        parsing: false,
+        borderColor: PALETTE[0],
+        backgroundColor: PALETTE[0],
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0,
+      }];
+    }
+
+    function _updateChart(chart, series, isDigital) {
+      if (!chart) return;
+      chart.data.datasets = _seriesToDatasets(series, isDigital);
+      chart.update("none");
+    }
+
+    // ---- Heatmap canvas renderer ----------------------------------
+    function _drawHeatmap(canvasId, hm) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const W = canvas.offsetWidth  || canvas.width  || 600;
+      const H = canvas.offsetHeight || canvas.height || 300;
+      canvas.width  = W;
+      canvas.height = H;
+
+      const PAD_L = 140, PAD_B = 40, PAD_T = 10, PAD_R = 8;
+      const plotW = W - PAD_L - PAD_R;
+      const plotH = H - PAD_T - PAD_B;
+
+      ctx.fillStyle = "var(--heatmap-bg, #0b1221)";
+      ctx.fillRect(0, 0, W, H);
+
+      const rows = (hm.devices || []).length;
+      const cols = (hm.time_labels || []).length;
+      if (!rows || !cols) {
+        ctx.fillStyle = "var(--muted)";
+        ctx.font = "12px Segoe UI";
+        ctx.fillText("Waiting for data…", 16, 22);
+        return;
+      }
+
+      const cW = plotW / cols;
+      const cH = plotH / rows;
+      const mn = hm.min ?? 0, mx = Math.max(hm.max ?? 1, mn + 1e-9);
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const v = ((hm.matrix[r] || [])[c]) || 0;
+          const t = Math.max(0, Math.min(1, (v - mn) / (mx - mn)));
+          const R = Math.round(30  + t * 180);
+          const G = Math.round(70  + (1 - Math.abs(t - 0.5) * 2) * 130);
+          const B = Math.round(180 - t * 120);
+          ctx.fillStyle = `rgb(${R},${G},${B})`;
+          ctx.fillRect(PAD_L + c * cW, PAD_T + r * cH, Math.ceil(cW), Math.ceil(cH));
+        }
+      }
+
+      ctx.strokeStyle = "rgba(35,49,79,0.6)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(PAD_L, PAD_T, plotW, plotH);
+
+      ctx.fillStyle = "var(--text)";
+      ctx.font = "11px Segoe UI";
+      ctx.textBaseline = "middle";
+      for (let r = 0; r < rows; r++) {
+        ctx.fillText(String(hm.devices[r]).slice(0, 24), 4, PAD_T + r * cH + cH / 2);
+      }
+
+      ctx.textBaseline = "alphabetic";
+      const step = Math.max(1, Math.floor(cols / 7));
+      for (let i = 0; i < cols; i += step) {
+        ctx.fillText(hm.time_labels[i], PAD_L + i * cW, H - 8);
+      }
+    }
+
+    // ---- Payload application --------------------------------------
+    function applyPayload(p) {
+        if (p.status !== "ok") return;
+  _updateClock(p.clock);
+    }
+
+    // ---- Fetch & poll loop ----------------------------------------
+    async function fetchData() {
+      try {
+        const res = await fetch(API_ENDPOINT);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        applyPayload(await res.json());
+      } catch (e) {
+        _updateClock("Connection error: " + e.message);
+      }
+    }
+
+    document.getElementById("cx-refresh").addEventListener("click", fetchData);
+    document.getElementById("cx-pause").addEventListener("click", () => {
+      _paused = !_paused;
+      document.getElementById("cx-pause").textContent = _paused ? "Resume" : "Pause";
+    });
+
+    // ---- Chart.js instance creation -------------------------------
+
+
+    // ---- Initial fetch & polling interval -------------------------
+    fetchData();
+    setInterval(() => { if (!_paused) fetchData(); }, POLL_MS);
+    </script>
+    </body>
+    </html>
